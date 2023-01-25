@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "circrl"
+version = "0.0.1"
+authors = [
+  { name="montemac", email="m.macdiarmid@gmail.com" },
+]
+description = "Tools for applying circuits-style interpretability techniques to RL agents."
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/montemac/circrl"
+
