@@ -126,11 +126,14 @@ class ModuleHook():
             return self.values_by_label.inverse[value]
         # Otherwise, set the provided label to point to this value
         self.values_by_label[label] = value
-        if isinstance(value, t.Tensor):
+        try:
             desc = str(value.shape) # Value is a single tensor
-        else:
-            # Value must be a tuple
-            desc = '({})'.format(', '.join([str(vv.shape) for vv in value]))
+        except AttributeError:
+            # Value might be a tuple of tensors?
+            try:
+                desc = '({})'.format(', '.join([str(vv.shape) for vv in value]))
+            except AttributeError:
+                desc = ''
         self.meta_by_label[label] = dict(desc=desc)
         return label
 
@@ -197,9 +200,14 @@ class ModuleHook():
             
         # Handle patching, if any
         if outp_label in self.patches:
-            pmask = self.patches[outp_label].mask
-            pvalue = self.patches[outp_label].value
-            outp = outp*(~pmask) + pvalue*pmask
+            patch = self.patches[outp_label]
+            if isinstance(patch, PatchDef):
+                pmask = patch.mask
+                pvalue = patch.value
+                outp = outp*(~pmask) + pvalue*pmask
+            else:
+                # Patch must be a custom function
+                outp = patch(outp)
             #for slice_tuple, patched_value in self.patches[outp_label]:
             #    outp[slice_tuple] = t.Tensor(patched_value)
             # Update the stored value since it's changed
