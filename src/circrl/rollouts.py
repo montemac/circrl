@@ -111,7 +111,7 @@ def run_rollout(model_or_func, env: gym.Env, deterministic: bool=False,
     renders_da = xr.DataArray(rearrange(renders_all, 'step h w rgb -> step h w rgb'), 
         dims=('step', 'h', 'w', 'rgb'), coords=coords)
     # Observations
-    obs_da = xr.DataArray(np.squeeze(rearrange(obs_all, 'step ... -> step ...')), 
+    obs_da = xr.DataArray(np.squeeze(rearrange(obs_all, 'step ... -> step ...'), axis=1),
         dims=tuple(['step']+['obd{}'.format(ii) for ii, sz in 
                 enumerate(obs_all[0].shape) if sz > 1]), coords=coords)
     # Actions
@@ -124,9 +124,9 @@ def run_rollout(model_or_func, env: gym.Env, deterministic: bool=False,
     else:
         model_states_da = None
     # Rewards
-    rewards_da = xr.DataArray(np.squeeze(np.array(rewards_all)), dims=('step'), coords=coords)
+    rewards_da = xr.DataArray(np.squeeze(np.array(rewards_all), axis=1), dims=('step'), coords=coords)
     # Dones
-    dones_da = xr.DataArray(np.squeeze(np.array(dones_all)), dims=('step'), coords=coords)
+    dones_da = xr.DataArray(np.squeeze(np.array(dones_all), axis=1), dims=('step'), coords=coords)
     # Final combined data object
     seq_data = RlStepSeq(renders_da, obs_da, actions_da, model_states_da, rewards_da, dones_da)
     return seq_data, episode_returns, step_cnt
