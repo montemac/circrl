@@ -10,7 +10,7 @@ import torch as t
 import torch.nn as nn
 import xarray as xr
 import gym
-from tqdm import tqdm
+from tqdm.auto import tqdm
 from moviepy.video.io.ImageSequenceClip import ImageSequenceClip
 from einops import rearrange
 
@@ -25,9 +25,14 @@ class RlStepSeq():
     rewards:      xr.DataArray  
     dones:        xr.DataArray  
 
-def run_rollout(model_or_func, env: gym.Env, deterministic: bool=False, 
-        seed: int=1, max_episodes: typing.Optional[int]=1,
-        max_steps: typing.Optional[int]=None) -> typing.Tuple[RlStepSeq, float, int]:
+def run_rollout(
+        model_or_func, 
+        env: gym.Env, 
+        deterministic: bool=False, 
+        seed: int=1, 
+        max_episodes: typing.Optional[int]=1,
+        max_steps: typing.Optional[int]=None, 
+        show_pbar: bool=True) -> typing.Tuple[RlStepSeq, float, int]:
     '''Run episodes, using provided policy in provided environment.
     Save and return episode data as an RlStepSeq object.'''
     assert max_episodes is not None or max_steps is not None, "Must provide max episodes or steps."
@@ -66,7 +71,7 @@ def run_rollout(model_or_func, env: gym.Env, deterministic: bool=False,
     step_cnt = 0
     is_complete = False
     episode_returns = []
-    with tqdm(total=max_steps) as pbar:
+    with tqdm(total=max_steps, disable=not show_pbar) as pbar:
         while not is_complete:
             # Convert the observation from dict form if needed
             if isinstance(obs, dict):
