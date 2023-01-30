@@ -3,6 +3,14 @@ import os
 import typing
 from dataclasses import dataclass
 import warnings
+import datetime
+import json
+#import lz4.frame
+#import lzma
+#import bz2
+#import gzip
+import blosc
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -23,7 +31,8 @@ class RlStepSeq():
     actions:      xr.DataArray  
     model_states: typing.Optional[xr.DataArray]
     rewards:      xr.DataArray  
-    dones:        xr.DataArray  
+    dones:        xr.DataArray
+    custom:       dict[str, xr.DataArray]
 
 def run_rollout(
         model_or_func, 
@@ -32,7 +41,8 @@ def run_rollout(
         seed: int=1, 
         max_episodes: typing.Optional[int]=1,
         max_steps: typing.Optional[int]=None, 
-        show_pbar: bool=True) -> typing.Tuple[RlStepSeq, float, int]:
+        show_pbar: bool=True,
+        custom_data_funcs: dict={}) -> typing.Tuple[RlStepSeq, float, int]:
     '''Run episodes, using provided policy in provided environment.
     Save and return episode data as an RlStepSeq object.'''
     assert max_episodes is not None or max_steps is not None, "Must provide max episodes or steps."
@@ -68,6 +78,7 @@ def run_rollout(
     model_states_all = []
     rewards_all = []
     dones_all = []
+    custom_data_all = {nm: [] for nm in custom_data_funcs.keys()}
     step_cnt = 0
     is_complete = False
     episode_returns = []
@@ -76,19 +87,28 @@ def run_rollout(
             # Convert the observation from dict form if needed
             if isinstance(obs, dict):
                 obs = obs['rgb']
-            # Store the latest frame
-            renders_all.append(env.render(mode='rgb_array'))
+            # Get the latest frame
+            render = env.render(mode='rgb_array')
             # Get action and model states
             with t.no_grad():
-                action, model_states = predict_func(obs, deterministic=deterministic)
+                action, model_states, *extra = predict_func(obs, deterministic=deterministic)
+            # Vectorize model states if it's None for consistent interface
+            model_states = [None] if model_states is None else model_states
+            # Call any provided custom data functions (these are called before the env step,
+            # so we have env, current render/obs, agent action/state, but no reward/done/obs_next)
+            for nm, func in custom_data_funcs.items():
+                custom_data_all[nm].append(
+                    func(env=env, render=render, obs=obs[0], action=action[0], 
+                        model_states=model_states[0], predict_extra=extra))
             # Step environment
             obs_next, rewards, dones, infos = env.step(action)
             # Store the obs, action, model_state, reward, done
-            obs_all.append(obs)
-            actions_all.append(action)
-            model_states_all.append(model_states)
-            rewards_all.append(rewards)
-            dones_all.append(dones)
+            renders_all.append(render)
+            obs_all.append(obs[0])
+            actions_all.append(action[0])
+            model_states_all.append(model_states[0])
+            rewards_all.append(rewards[0])
+            dones_all.append(dones[0])
             step_cnt += env.num_envs
             # Detect whether episode has terminated
             # TODO: done sometimes set when losing a life in Atari games? Use something else here?
@@ -116,12 +136,11 @@ def run_rollout(
     renders_da = xr.DataArray(rearrange(renders_all, 'step h w rgb -> step h w rgb'), 
         dims=('step', 'h', 'w', 'rgb'), coords=coords)
     # Observations
-    obs_da = xr.DataArray(np.squeeze(rearrange(obs_all, 'step ... -> step ...')), 
+    obs_da = xr.DataArray(rearrange(obs_all, 'step ... -> step ...'), 
         dims=tuple(['step']+['obd{}'.format(ii) for ii, sz in 
                 enumerate(obs_all[0].shape) if sz > 1]), coords=coords)
     # Actions
-    actions_da = xr.DataArray(rearrange(actions_all, 'step a -> step a'), 
-        dims=('step', 'action'), coords=coords)
+    actions_da = xr.DataArray(np.array(actions_all), dims=('step'), coords=coords)
     # Model states
     if model_states_all[0] is not None:
         model_states_da = xr.DataArray(rearrange(model_states_all, 'step ms -> step ms'), 
@@ -129,11 +148,21 @@ def run_rollout(
     else:
         model_states_da = None
     # Rewards
-    rewards_da = xr.DataArray(np.squeeze(np.array(rewards_all)), dims=('step'), coords=coords)
+    rewards_da = xr.DataArray(np.array(rewards_all), dims=('step'), coords=coords)
     # Dones
-    dones_da = xr.DataArray(np.squeeze(np.array(dones_all)), dims=('step'), coords=coords)
+    dones_da = xr.DataArray(np.array(dones_all), dims=('step'), coords=coords)
+    # Custom data
+    custom_data_das = {}
+    for nm, custom_data in custom_data_all.items():
+        if isinstance(custom_data[0], np.ndarray):
+            custom_data_das[nm] = xr.DataArray(rearrange(custom_data, 'step ... -> step ...'), 
+                dims=tuple(['step']+['{}_d{}'.format(nm, ii) for ii, sz in 
+                        enumerate(custom_data[0].shape)]), coords=coords)
+        else:
+            custom_data_das[nm] = xr.DataArray(np.array(custom_data), 
+                dims=('step'), coords=coords)
     # Final combined data object
-    seq_data = RlStepSeq(renders_da, obs_da, actions_da, model_states_da, rewards_da, dones_da)
+    seq_data = RlStepSeq(renders_da, obs_da, actions_da, model_states_da, rewards_da, dones_da, custom_data_das)
     return seq_data, episode_returns, step_cnt
 
 def split_seq(seq: RlStepSeq, start_inds):
@@ -166,6 +195,58 @@ class TempVideoFileFromSeq:
         # Delete the temp file if it exists
         if os.path.isfile(self.vid_fn):
             os.remove(self.vid_fn)
+
+# Function to generate dataset of episodes
+def make_dataset(predict_func, desc, path, num_episodes, 
+        env_setup_func,
+        seq_mod_func=lambda seq: seq, 
+        run_rollout_kwargs={}):
+    # Create a timestamped output folder
+    utc = datetime.datetime.utcnow()
+    dr = utc.strftime(os.path.join(path, '%Y%m%dT%H%M%S'))
+    os.mkdir(dr)
+    # Create a dataset metadata file
+    metadata = dict(
+        desc = desc,
+        timestamp = utc.strftime('%Y%m%dT%H%M%S'),
+        num_episodes = num_episodes,
+        run_rollout_kwargs = run_rollout_kwargs
+    )
+    with open(os.path.join(dr, 'metadata.json'), 'w') as fl:
+        json.dump(metadata, fl, indent=2, default=lambda a: str(a))
+    # Loop through episodes
+    ep_cnt = 0
+    for ep_cnt in tqdm(range(num_episodes)):
+        # Create env
+        venv, episode_metadata = env_setup_func()
+        # Run rollout
+        #run_rollout_kwargs['show_pbar'] = False
+        seq, episode_returns, step_cnt = run_rollout(predict_func, venv, **run_rollout_kwargs)
+        # Prepare episode data object
+        episode_data = dict(
+            episode_metadata=episode_metadata,
+            seq=seq_mod_func(seq),
+            step_cnt=step_cnt,
+            ep_cnt = ep_cnt,
+        )
+        # Save episode data
+        #with open(os.path.join(dr, f'{ep_cnt}.pk'), "wb") as fl:
+        #with lzma.open(os.path.join(dr, f'{ep_cnt}.xa'), "wb") as fl:
+        #with lz4.frame.open(os.path.join(dr, f'{ep_cnt}.lz4'), "wb") as fl:
+        #with bz2.BZ2File(os.path.join(dr, f'{ep_cnt}.bz2'), "wb") as fl:
+        #with gzip.open(os.path.join(dr, f'{ep_cnt}.gz'), "wb") as fl:
+        #    pickle.dump(episode_data, fl, protocol=pickle.HIGHEST_PROTOCOL)
+
+        pickled_data = pickle.dumps(episode_data, protocol=pickle.HIGHEST_PROTOCOL)
+        compressed_pickle = blosc.compress(pickled_data)
+        with open(os.path.join(dr, f'{ep_cnt}.dat'), "wb") as fl:
+            fl.write(compressed_pickle)
+
+def load_saved_rollout(fn):
+    with open(fn, "rb") as f:
+        compressed_pickle = f.read()
+    depressed_pickle = blosc.decompress(compressed_pickle)
+    return pickle.loads(depressed_pickle)
 
 # %%
 # Basic tests

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "circrl"
-version = "0.0.2"
+version = "0.0.3"
 authors = [
   { name="montemac", email="m.macdiarmid@gmail.com" },
 ]
@@ -26,6 +26,7 @@ dependencies = [
   'moviepy >= 1.0.3',
   'gym >= 0.21.0',
   'tqdm >= 4.64.1',
+  'blosc >= 1.11.1'
 ]
 
 [project.urls]
