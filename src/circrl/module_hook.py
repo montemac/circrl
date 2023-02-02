@@ -2,6 +2,7 @@ import copy
 from contextlib import contextmanager
 from dataclasses import dataclass
 import typing
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -215,6 +216,11 @@ class ModuleHook():
             return outp
 
     def probe_with_input(self, inp, patches={}, func=None, **kwargs):
+        warnings.warn('''Function probe_with_input is deprecated due to
+        a confusing name and has been replaced with run_with_input.''')
+        return self.run_with_input(inp, patches, func, **kwargs)
+    
+    def run_with_input(self, inp, patches={}, func=None, **kwargs):
         '''Makes a forward pass over the network, creating all intermediate module
         input/output values.  By default, customizes the forward call to use predict() 
         if module type supports it, so that we get all the observation pre-processing,
