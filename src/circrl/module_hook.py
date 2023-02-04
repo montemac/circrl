@@ -2,6 +2,7 @@ import copy
 from contextlib import contextmanager
 from dataclasses import dataclass
 import typing
+from typing import Dict
 import warnings
 
 import numpy as np
@@ -36,10 +37,10 @@ class PatchDef():
 class ModuleHook():
     network: nn.Module
     values_by_label: bidict[str, t.Tensor]
-    modules_by_label: dict[str, nn.Module]
-    module_labels_by_id: dict[int, str]
-    module_data_by_label: dict[str, typing.Any]
-    meta_by_label: dict[str, typing.Any]
+    modules_by_label: Dict[str, nn.Module]
+    module_labels_by_id: Dict[int, str]
+    module_data_by_label: Dict[str, typing.Any]
+    meta_by_label: Dict[str, typing.Any]
     value_to_module_edges: set[tuple[str, str]]
     module_to_value_edges: set[tuple[str, str]]
 
