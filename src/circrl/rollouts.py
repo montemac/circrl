@@ -32,7 +32,7 @@ class RlStepSeq():
     model_states: typing.Optional[xr.DataArray]
     rewards:      xr.DataArray  
     dones:        xr.DataArray
-    custom:       dict[str, xr.DataArray]
+    custom:       typing.Dict[str, xr.DataArray]
 
 def run_rollout(
         model_or_func, 
