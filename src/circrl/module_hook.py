@@ -12,6 +12,7 @@ import torch.nn as nn
 import xarray as xr
 from einops import rearrange
 from bidict import bidict
+from typing import Tuple, Set
 
 # TODO: simplify dependencies for visualizing computational graph
 # import panel as pn
@@ -41,8 +42,8 @@ class ModuleHook():
     module_labels_by_id: Dict[int, str]
     module_data_by_label: Dict[str, typing.Any]
     meta_by_label: Dict[str, typing.Any]
-    value_to_module_edges: set[tuple[str, str]]
-    module_to_value_edges: set[tuple[str, str]]
+    value_to_module_edges: Set[Tuple[str, str]]
+    module_to_value_edges: Set[Tuple[str, str]]
 
     def __init__(self, network, module_labels=None):
         '''Copy the provided network and add forward hooks to extract values from all layers
