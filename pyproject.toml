@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "circrl"
-version = "0.1.0"
+version = "0.2.0"
 authors = [
   { name="montemac", email="m.macdiarmid@gmail.com" },
 ]
@@ -27,7 +27,9 @@ dependencies = [
   'gym >= 0.21.0',
   'tqdm >= 4.64.1',
   'blosc >= 1.11.1',
-  'scikit-learn >= 1.2.1'
+  'scikit-learn >= 1.2.1',
+  'holoviews>=1.15.2',
+  'hvplot>=0.8.1'
 ]
 
 [project.urls]

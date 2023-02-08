@@ -17,10 +17,9 @@ from typing import Tuple, Set
 # TODO: simplify dependencies for visualizing computational graph
 # import panel as pn
 # pn.extension('plotly', comms='ipywidgets')
-# import hvplot.networkx as hvnx
-# import networkx as nx
-# from networkx.algorithms import bipartite
-# import holoviews as hv
+import hvplot.networkx as hvnx
+import networkx as nx
+import holoviews as hv
 
 @dataclass
 class ModuleHookData():
@@ -279,48 +278,50 @@ class ModuleHook():
         return preceders
 
     # TODO: simplify dependencies
-    # def get_graph_after_probe(self, include_parent_modules=True, show_unconnected=False):
-    #     # Nodes and edges using labels
-    #     def make_node_tuples(labels):
-    #         return [(label, self.meta_by_label[label]) for label in labels]
-    #     value_nodes = make_node_tuples(self.values_by_label.keys())
-    #     modules_with_edges = set([mod for val, mod in self.value_to_module_edges] +
-    #         [mod for mod, val in self.module_to_value_edges])
-    #     modules_to_use = set([label for label, mod in self.modules_by_label.items() 
-    #         if ((include_parent_modules or len(list(mod.children()))==0) and
-    #             (show_unconnected       or label in modules_with_edges)     )])
-    #     module_nodes = make_node_tuples(modules_to_use)
-    #     edges = [(mod, val) for mod, val in self.module_to_value_edges if mod in modules_to_use] + \
-    #         [(val, mod) for val, mod in self.value_to_module_edges if mod in modules_to_use]
-    #     # Build the graph
-    #     B = nx.DiGraph()
-    #     B.add_nodes_from(module_nodes, type='module')
-    #     B.add_nodes_from(value_nodes, type='value')
-    #     B.add_edges_from(edges)
-    #     # Lay out the graph
-    #     pos = nx.layout.kamada_kawai_layout(B)
-    #     # Calculate node colors 
-    #     node_top_level_by_label = {lab: ii for ii, lab in enumerate(list(nx.topological_sort(B)))}
-    #     node_top_levels = [node_top_level_by_label[lab] for lab in B.nodes]
-    #     # Create the plot
-    #     viz = hvnx.draw(B, pos, node_color=node_top_levels, cmap='Blues', 
-    #         node_size=200-(hv.dim('type')=='value')*100, arrowhead_length=0.01 ,width=800, height=800)
-    #     # Add the responsive tab object
-    #     stream_selection = hv.streams.Selection1D(source=viz.nodes)
-    #     @pn.depends(stream_selection.param.index)
-    #     def selection(index):
-    #         if len(index) == 0:
-    #             ss = 'No selection'
-    #         else:
-    #             ii = index[0]
-    #             label = list(B.nodes)[ii]
-    #             obj = self.objects_by_label[label]
-    #             _id = id(obj)
-    #             ss = '\n'.join([
-    #                 'Node index: {}'.format(ii),
-    #                 'Label: {}'.format(label),
-    #                 'Type: {}'.format('module' if isinstance(obj, nn.Module) else 'value'),
-    #                 'ID: {}'.format(_id)])
-    #         return pn.pane.Str(ss, width=200)
-    #     #return pn.Column(viz.nodes.opts(alpha=0) * viz, selection)
-    #     return pn.Pane(viz)
+    def get_graph(self, include_parent_modules=True, show_unconnected=False,
+            width=800, height=800):
+        # Nodes and edges using labels
+        def make_node_tuples(labels):
+            return [(label, self.meta_by_label[label]) for label in labels]
+        value_nodes = make_node_tuples(self.values_by_label.keys())
+        modules_with_edges = set([mod for val, mod in self.value_to_module_edges] +
+            [mod for mod, val in self.module_to_value_edges])
+        modules_to_use = set([label for label, mod in self.modules_by_label.items() 
+            if ((include_parent_modules or len(list(mod.children()))==0) and
+                (show_unconnected       or label in modules_with_edges)     )])
+        module_nodes = make_node_tuples(modules_to_use)
+        edges = [(mod, val) for mod, val in self.module_to_value_edges if mod in modules_to_use] + \
+            [(val, mod) for val, mod in self.value_to_module_edges if mod in modules_to_use]
+        # Build the graph
+        B = nx.DiGraph()
+        B.add_nodes_from(module_nodes, type='module')
+        B.add_nodes_from(value_nodes, type='value')
+        B.add_edges_from(edges)
+        # Lay out the graph
+        pos = nx.layout.kamada_kawai_layout(B)
+        # Calculate node colors 
+        node_top_level_by_label = {lab: ii for ii, lab in enumerate(list(nx.topological_sort(B)))}
+        node_top_levels = [node_top_level_by_label[lab] for lab in B.nodes]
+        # Create the plot
+        viz = hvnx.draw(B, pos, node_color=node_top_levels, cmap='Blues', 
+            node_size=200-(hv.dim('type')=='value')*100, arrowhead_length=0.01 ,width=800, height=800)
+        return viz
+        # # Add the responsive tab object
+        # stream_selection = hv.streams.Selection1D(source=viz.nodes)
+        # @pn.depends(stream_selection.param.index)
+        # def selection(index):
+        #     if len(index) == 0:
+        #         ss = 'No selection'
+        #     else:
+        #         ii = index[0]
+        #         label = list(B.nodes)[ii]
+        #         obj = self.objects_by_label[label]
+        #         _id = id(obj)
+        #         ss = '\n'.join([
+        #             'Node index: {}'.format(ii),
+        #             'Label: {}'.format(label),
+        #             'Type: {}'.format('module' if isinstance(obj, nn.Module) else 'value'),
+        #             'ID: {}'.format(_id)])
+        #     return pn.pane.Str(ss, width=200)
+        # #return pn.Column(viz.nodes.opts(alpha=0) * viz, selection)
+        # return pn.Pane(viz)
