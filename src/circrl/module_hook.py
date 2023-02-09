@@ -195,7 +195,7 @@ class ModuleHook():
                             stride=module.stride, padding=module.padding, 
                             dilation=module.dilation)
                         presum_list.append(presum_this_input)
-                    presum_tensor = rearrange(presum_list, "inch b outch h w -> inch outch b h w")
+                    presum_tensor = rearrange(presum_list, "inch b outch h w -> b outch inch h w")
                     module_data.custom_data['presum'] = presum_tensor
             # Store the module data
             self.set_module_data(module_label, module_data)
@@ -276,6 +276,19 @@ class ModuleHook():
             preceders = [prec for prec in preceders if not (prec in self.modules_by_label and
                 len(list(self.modules_by_label[prec].children()))!=0)]
         return preceders
+
+    def get_successors(self, label, include_parent_modules=False):
+        '''Step forward through computational graph and return next
+        module/value label(s).'''
+        # TODO: make this more efficient, prob shouldn't need to loop through edges?
+        successors = []
+        for n1, n2 in (list(self.module_to_value_edges) + list(self.value_to_module_edges)):
+            if n1 == label:
+                successors.append(n2)
+        if not include_parent_modules:
+            successors = [succ for succ in successors if not (succ in self.modules_by_label and
+                len(list(self.modules_by_label[succ].children()))!=0)]
+        return successors
 
     # TODO: simplify dependencies
     def get_graph(self, include_parent_modules=True, show_unconnected=False,
