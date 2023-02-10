@@ -173,6 +173,7 @@ def split_seq(seq: RlStepSeq, start_inds):
     for start_ind, end_ind in zip(start_inds[:-1], start_inds[1:]):
         args = [aa.sel(step=slice(start_ind, end_ind)) if aa is not None else aa for aa in 
             [seq.renders, seq.obs, seq.actions, seq.model_states, seq.rewards, seq.dones]]
+        args.append({nm: aa.sel(step=slice(start_ind, end_ind)) for nm, aa in seq.custom.items()})
         new_seq = RlStepSeq(*args)
         new_seqs.append(new_seq)
     return new_seqs
