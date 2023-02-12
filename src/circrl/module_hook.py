@@ -148,15 +148,9 @@ class ModuleHook():
         inp_labels = []
         for ii, inp in enumerate(inps):
             inp_labels.append(self.set_value("{}_in{}".format(module_label, ii), inp))
-        # Store the output value
-        outp_label = self.set_value("{}_out".format(module_label), outp)
         # Store edges to this module
         for inp_label in inp_labels:
             self.value_to_module_edges.add((inp_label, module_label))
-        # Store output edge from this module, but only if the output object is 
-        # different to all input objects (i.e. avoid cycles if we have identity modules)
-        if not id(outp) in [id(inp) for inp in inps]:
-            self.module_to_value_edges.add((module_label, outp_label))        
 
         # Populate custom data, if enabled (this can be large)
         if self.hook_should_get_custom_data:
@@ -199,10 +193,15 @@ class ModuleHook():
                     module_data.custom_data['presum'] = presum_tensor
             # Store the module data
             self.set_module_data(module_label, module_data)
-            
+
         # Handle patching, if any
-        if outp_label in self.patches:
-            patch = self.patches[outp_label]
+        ret_val = None
+        # Only apply patches to a label that was first created by this module,
+        # not one that is the output of this module but may have been created by a child module.
+        # Avoid multiple applications of the same patch.
+        direct_output_label = "{}_out".format(module_label)
+        if direct_output_label in self.patches:
+            patch = self.patches[direct_output_label]
             if isinstance(patch, PatchDef):
                 pmask = patch.mask
                 pvalue = patch.value
@@ -210,11 +209,16 @@ class ModuleHook():
             else:
                 # Patch must be a custom function
                 outp = patch(outp)
-            #for slice_tuple, patched_value in self.patches[outp_label]:
-            #    outp[slice_tuple] = t.Tensor(patched_value)
-            # Update the stored value since it's changed
-            self.set_value("{}_out".format(module_label), outp)
-            return outp
+            ret_val = outp
+
+        # Store the output value
+        outp_label = self.set_value(direct_output_label, outp)
+        # Store output edge from this module, but only if the output object is 
+        # different to all input objects (i.e. avoid cycles if we have identity modules)
+        if not id(outp) in [id(inp) for inp in inps]:
+            self.module_to_value_edges.add((module_label, outp_label))   
+
+        return ret_val     
 
     def probe_with_input(self, inp, patches={}, func=None, **kwargs):
         warnings.warn('''Function probe_with_input is deprecated due to
