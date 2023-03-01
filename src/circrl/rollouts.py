@@ -42,6 +42,7 @@ def run_rollout(
         max_episodes: typing.Optional[int]=1,
         max_steps: typing.Optional[int]=None, 
         show_pbar: bool=True,
+        return_renders: bool=True,
         custom_data_funcs: dict={}) -> typing.Tuple[RlStepSeq, float, int]:
     '''Run episodes, using provided policy in provided environment.
     Save and return episode data as an RlStepSeq object.'''
@@ -103,7 +104,8 @@ def run_rollout(
             # Step environment
             obs_next, rewards, dones, infos = env.step(action)
             # Store the obs, action, model_state, reward, done
-            renders_all.append(render)
+            if return_renders:
+                renders_all.append(render)
             obs_all.append(obs[0])
             actions_all.append(action[0])
             model_states_all.append(model_states[0])
@@ -133,8 +135,11 @@ def run_rollout(
     #     ww = ii % render.shape[1]
     #     render[10,ww,:] = 255 - render[10,ww,:]
     coords = {'step': np.arange(len(renders_all))}
-    renders_da = xr.DataArray(rearrange(renders_all, 'step h w rgb -> step h w rgb'), 
-        dims=('step', 'h', 'w', 'rgb'), coords=coords)
+    if return_renders:
+        renders_da = xr.DataArray(rearrange(renders_all, 'step h w rgb -> step h w rgb'), 
+            dims=('step', 'h', 'w', 'rgb'), coords=coords)
+    else:
+        renders_da = None
     # Observations
     obs_da = xr.DataArray(rearrange(obs_all, 'step ... -> step ...'), 
         dims=tuple(['step']+['obd{}'.format(ii) for ii, sz in 
@@ -198,9 +203,8 @@ class TempVideoFileFromSeq:
             os.remove(self.vid_fn)
 
 # Function to generate dataset of episodes
-def make_dataset(predict_func, desc, path, num_episodes, 
-        env_setup_func,
-        seq_mod_func=lambda seq: seq, 
+def make_dataset(predict_func, desc, path, num_episodes, env_setup_func,
+        initial_seed=0, seq_mod_func=lambda seq: seq, 
         run_rollout_kwargs={}):
     # Create a timestamped output folder
     utc = datetime.datetime.utcnow()
@@ -217,12 +221,13 @@ def make_dataset(predict_func, desc, path, num_episodes,
         json.dump(metadata, fl, indent=2, default=lambda a: str(a))
     # Loop through episodes
     ep_cnt = 0
+    seed = initial_seed
     for ep_cnt in tqdm(range(num_episodes)):
         # Create env
-        venv, episode_metadata = env_setup_func()
+        venv, episode_metadata = env_setup_func(seed=seed)
         # Run rollout
         #run_rollout_kwargs['show_pbar'] = False
-        seq, episode_returns, step_cnt = run_rollout(predict_func, venv, **run_rollout_kwargs)
+        seq, episode_returns, step_cnt = run_rollout(predict_func, venv, seed=seed, **run_rollout_kwargs)
         # Prepare episode data object
         episode_data = dict(
             episode_metadata=episode_metadata,
@@ -242,6 +247,7 @@ def make_dataset(predict_func, desc, path, num_episodes,
         compressed_pickle = blosc.compress(pickled_data)
         with open(os.path.join(dr, f'{ep_cnt}.dat'), "wb") as fl:
             fl.write(compressed_pickle)
+        seed += 1
 
 def load_saved_rollout(fn):
     with open(fn, "rb") as f:
