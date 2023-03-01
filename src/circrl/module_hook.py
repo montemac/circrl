@@ -74,6 +74,7 @@ class ModuleHook():
         self.batch_index = None
         self.last_batch_index = None
         self.patches = {}
+        self.values_to_store = None
 
     def register_hook(self, module):
         # Register forward hook on provided module
@@ -97,6 +98,12 @@ class ModuleHook():
         yield None
         self.batch_index = None
 
+    @contextmanager
+    def store_specific_values(self, values):
+        self.values_to_store = values
+        yield None
+        self.values_to_store = None
+
     def tensor_to_result_object(self, tensor, label):
         array = tensor.detach().numpy()
         if self.last_batch_index is None:
@@ -119,13 +126,19 @@ class ModuleHook():
     def set_module_data(self, label, module_data):
         self.module_data_by_label[label] = module_data
 
+    def get_label_for_value(self, value: t.Tensor, suggested_label: typing.Optional[str] = None):
+        if value in self.values_by_label.inverse:
+            return self.values_by_label.inverse[value]
+        return suggested_label
+
     def set_value(self, label: str, value: t.Tensor):
         # self.values_by_label is a bidict, so keys (labels) and values (value
         # tensors) are both unique sets.
         # First, check if this value object is already in the bidict; if so,
         # return it's label (value labels shouldn't ever change)
-        if value in self.values_by_label.inverse:
-            return self.values_by_label.inverse[value]
+        existing_label = self.get_label_for_value(value)
+        if existing_label is not None:
+            return self.values_by_label[existing_label]
         # Otherwise, set the provided label to point to this value
         self.values_by_label[label] = value
         try:
@@ -134,7 +147,7 @@ class ModuleHook():
             # Value might be a tuple of tensors?
             try:
                 desc = '({})'.format(', '.join([str(vv.shape) for vv in value]))
-            except AttributeError:
+            except (AttributeError, TypeError):
                 desc = ''
         self.meta_by_label[label] = dict(desc=desc)
         return label
@@ -147,7 +160,12 @@ class ModuleHook():
         # Store the input values
         inp_labels = []
         for ii, inp in enumerate(inps):
-            inp_labels.append(self.set_value("{}_in{}".format(module_label, ii), inp))
+            inp_label = self.get_label_for_value(inp, "{}_in{}".format(module_label, ii))
+            inp_labels.append(inp_label)
+            if self.values_to_store is None or inp_label in self.values_to_store:
+                self.set_value(inp_label, inp)
+            else:
+                self.set_value(inp_label, t.Tensor([]))
         # Store edges to this module
         for inp_label in inp_labels:
             self.value_to_module_edges.add((inp_label, module_label))
@@ -212,7 +230,11 @@ class ModuleHook():
             ret_val = outp
 
         # Store the output value
-        outp_label = self.set_value(direct_output_label, outp)
+        outp_label = self.get_label_for_value(outp, direct_output_label)
+        if self.values_to_store is None or outp_label in self.values_to_store:
+            self.set_value(outp_label, outp)
+        else:
+            self.set_value(outp_label, t.Tensor([]))
         # Store output edge from this module, but only if the output object is 
         # different to all input objects (i.e. avoid cycles if we have identity modules)
         if not id(outp) in [id(inp) for inp in inps]:
@@ -225,7 +247,7 @@ class ModuleHook():
         a confusing name and has been replaced with run_with_input.''')
         return self.run_with_input(inp, patches, func, **kwargs)
     
-    def run_with_input(self, inp, patches={}, func=None, **kwargs):
+    def run_with_input(self, inp, patches={}, func=None, values_to_store=None, **kwargs):
         '''Makes a forward pass over the network, creating all intermediate module
         input/output values.  By default, customizes the forward call to use predict() 
         if module type supports it, so that we get all the observation pre-processing,
@@ -242,7 +264,8 @@ class ModuleHook():
             inp = inp.to_numpy()
         # Make forward pass using patches, batch index (if any), and storing intermediate data
         with self.set_hook_should_get_custom_data(), self.use_patches(patches), \
-                self.use_batch_index(batch_index), t.no_grad():
+                self.use_batch_index(batch_index), self.store_specific_values(values_to_store), \
+                t.no_grad():
             # If a function is provided, call it with the input as a tensor
             if func is not None:
                 outp = func(self.network, t.from_numpy(inp), **kwargs)
