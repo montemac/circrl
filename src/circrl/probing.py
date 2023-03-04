@@ -29,7 +29,7 @@ def get_sort_inds_and_ranks(x):
     ranks[sort_inds] = np.arange(len(x))
     return sort_inds, ranks
 
-def linear_probe(X_full, y, model_type='classifier', test_size=0.2, 
+def linear_probe(X_full, y, model_type='classifier', test_size=0.2, random_state=None, 
         **regression_kwargs):
     '''Perform a linear probe (classification or ridge regression) on a provided
     X, y dataset.  Performs train/test split based on provided test_size, and
@@ -38,12 +38,12 @@ def linear_probe(X_full, y, model_type='classifier', test_size=0.2,
     results objects.'''
     X = rearrange(X_full, 'b ... -> b (...)')
     X_train, X_test, y_train, y_test = train_test_split(X, y, 
-            test_size=0.2, random_state=42)
+            test_size=test_size, random_state=random_state)
 
     if model_type == 'classifier':
-        mdl = LogisticRegression(**regression_kwargs)
+        mdl = LogisticRegression(random_state=random_state, **regression_kwargs)
     elif model_type == 'ridge':
-        mdl = Ridge(**regression_kwargs)
+        mdl = Ridge(random_state=random_state, **regression_kwargs)
     mdl.fit(X_train, y_train)
     y_pred = mdl.predict(X_test)
 
@@ -64,13 +64,16 @@ def linear_probe(X_full, y, model_type='classifier', test_size=0.2,
 
     return result
 
-def linear_probe_multi_channels(hook, value_label, y, ch_inds, **regression_kwargs):
+def linear_probe_multi_channels(hook, value_label, y, ch_inds, random_state=None,
+        **regression_kwargs):
     '''Probe with a set of channels from a specific value taken from the
     provided hook object.  Wrapper around linear_probe.'''
     value = hook.get_value_by_label(value_label)
     return linear_probe(value[:,ch_inds,:,:].values, y, **regression_kwargs)
 
-def linear_probe_single_channels(hook, value_labels, y, **regression_kwargs):
+def linear_probe_single_channels(hook, value_labels, y, 
+        value_preproc_func=lambda value: value, random_state=None,
+        **regression_kwargs):
     '''Probe with all individual channels in all specified values taken from the
     provided hook object.  Wrapper around linear_probe.'''
     results = []
@@ -80,7 +83,7 @@ def linear_probe_single_channels(hook, value_labels, y, **regression_kwargs):
 
         for ch_ind in tqdm(range(value.shape[1])):
             ch = value[:,ch_ind,:,:]
-            results_this = linear_probe(ch.values, y, **regression_kwargs)
+            results_this = linear_probe(value_preproc_func(ch).values, y, **regression_kwargs)
             results_this.update({
                 'value_label': value_label,
                 'channel': ch_ind,})
@@ -98,6 +101,7 @@ def sparse_linear_probe(hook, value_labels, target,
         test_size = 0.2,
         do_scale_activations = False,
         target_labels = None,
+        random_state = None,
         **regression_kwargs):
     '''Run a probe to train linear classifiers (possibly multi-class) on
     datasets of activations from a provided list of value labels, given a set
@@ -131,7 +135,7 @@ def sparse_linear_probe(hook, value_labels, target,
     is_multiclass = num_target_labels > 2
     if target_labels is None:
         target_labels = y_unique
-    
+
     # Try all values if none provided
     if value_labels is None:
         value_labels = hook.values_by_label.keys()
@@ -145,12 +149,16 @@ def sparse_linear_probe(hook, value_labels, target,
 
     # Structure to hold the results
     probe_results = xr.Dataset(dict(
-        model = xr.DataArray(
-            data=np.zeros(results_shape, dtype=LogisticRegression),
-            dims=results_dims),
-        score = xr.DataArray(
-            data=np.zeros(results_shape), 
-            dims=results_dims))).assign_coords(dict(
+            model = xr.DataArray(
+                data=np.zeros(results_shape, dtype=LogisticRegression),
+                dims=results_dims),
+            score = xr.DataArray(
+                data=np.zeros(results_shape), 
+                dims=results_dims),
+            y_pred_all = xr.DataArray(
+                data=np.zeros(results_shape + y.shape), 
+                dims=results_dims + ['batch'] + [f'yd{ii}' for ii in range(len(y.shape)-1)]),
+        )).assign_coords(dict(
                 value_label = value_labels,
                 index_num_step = np.arange(num_index_nums)))
         
@@ -183,7 +191,7 @@ def sparse_linear_probe(hook, value_labels, target,
 
         # Split into train and test set
         X_train, X_test, y_train, y_test = train_test_split(X_scl, y, 
-            test_size=test_size)
+            test_size=test_size, random_state=random_state)
 
         # Get activation ranking using provided method
         if rank_method == 'f_test':
@@ -212,11 +220,11 @@ def sparse_linear_probe(hook, value_labels, target,
                 if is_multiclass:
                     # Multi-class regression
                     mdl = LogisticRegression(multi_class='ovr', 
-                        solver='liblinear', **regression_kwargs)
+                        solver='liblinear', random_state=random_state, **regression_kwargs)
                 else:
-                    mdl = LogisticRegression(**regression_kwargs)
+                    mdl = LogisticRegression(random_state=random_state, **regression_kwargs)
             elif model_type == 'ridge':
-                mdl = Ridge(**regression_kwargs)
+                mdl = Ridge(random_state=random_state, **regression_kwargs)
 
             # Train!
             mdl.fit(X_top_train, y_train)
@@ -225,6 +233,7 @@ def sparse_linear_probe(hook, value_labels, target,
             # (Some useful reference code here: https://www.kaggle.com/code/satishgunjal/multiclass-logistic-regression-using-sklearn/notebook)
             y_pred = mdl.predict(X_top_test)
             score = mdl.score(X_top_test, y_test)
+            y_pred_all = mdl.predict(X_scl[:,top_K_inds_train])
             
             # Collate all the results into an object
             #relevant_indices.loc[dict(value=value_label, count_step=final_count_step)].values[()] = relinds_this
@@ -232,6 +241,8 @@ def sparse_linear_probe(hook, value_labels, target,
                 dict(value_label=label, index_num_step=kk)].values[()] = mdl
             probe_results['score'].loc[
                 dict(value_label=label, index_num_step=kk)].values[()] = score
+            probe_results['y_pred_all'].loc[
+                dict(value_label=label, index_num_step=kk)].values[()] = y_pred_all
             
             if model_type == 'classifier':
                 # if is_multiclass:
