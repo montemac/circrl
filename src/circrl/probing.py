@@ -176,9 +176,13 @@ def sparse_linear_probe(hook, value_labels, target,
     # Iterate over value labels
     for label in tqdm(value_labels):
         value = hook.get_value_by_label(label)
+        try:
+            value = value.values # Handle xarray values
+        except:
+            pass
 
         # Create training data, reshaping activation value to 2D
-        X = rearrange(value.values, 'b ... -> b (...)')
+        X = rearrange(value, 'b ... -> b (...)')
         D_act = X.shape[1]
 
         # Scale, if requested
