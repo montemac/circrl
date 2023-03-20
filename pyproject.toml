@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "circrl"
-version = "0.5.0"
+version = "0.6.0"
 authors = [
   { name="montemac", email="m.macdiarmid@gmail.com" },
 ]
@@ -17,7 +17,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-  'numpy >= 1.24.1',
+  'numpy >= 1.22.1',
   'torch >= 1.13.1',
   'pandas >= 1.5.2',
   'xarray >= 2022.12.0',
