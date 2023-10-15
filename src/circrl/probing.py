@@ -76,9 +76,8 @@ def linear_probe(
     assert (
         sparse_method is None
         or sparse_num is not None
-        or sparse_frac is not None,
-        "Must specify sparse_num or sparse_frac if sparse_method is not None",
-    )
+        or sparse_frac is not None
+    ), "Must specify sparse_num or sparse_frac if sparse_method is not None"
     # Convert to numpy arrays if necessary
     if isinstance(x, t.Tensor):
         x = x.cpu().numpy()
