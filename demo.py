@@ -1,3 +1,13 @@
+# %%[markdown]
+# # CircRL Demo Notebook
+#
+# This notebook demonstrates how to use CircRL to run rollouts, cache
+# activations, train linear probes on cached activations, and apply
+# arbitrary hook functions during a rollout.
+#
+# Dependencies required for this demo can be installed with
+# `pip install -r requirements_demo.txt`.
+
 # %%
 # Imports
 import numpy as np
@@ -145,7 +155,7 @@ is_strong_up = (up_probs > 0.9).cpu().numpy()
 # Now use CircRL to probe!
 # We use a sparse probe to see if we can find a small set of conv pixels
 # that predict strong paddle-up actions
-SPARSE_NUMS = [1, 5, 10, 20]
+SPARSE_NUMS = [1, 5, 10, 20, 50]
 probe_results = []
 for sparse_num in SPARSE_NUMS:
     result = cpr.linear_probe(
@@ -184,12 +194,17 @@ fig.add_hline(
 fig.show()
 
 # %%
-# Demonstrate custom hook functions mean-ablating the top-K pixels
-# found by the sparse probing to see how this affects the model's
-# behavior
+# Demonstrate custom hook functions mean-ablating the 1% of pixels that
+# are most predictive of moving the paddle up
+FRAC = 0.01
 
-top_inds = t.tensor(result["sparse_inds"].copy()).to(activs.device)
-mean_activs_flat = t.tensor(result["x"].mean(axis=0)).to(activs.device)
+activs_flat = rearrange(activs, "b ... -> b (...)")
+f_test, _ = cpr.f_classif_fixed(activs_flat.cpu().numpy(), is_strong_up)
+top_inds = t.tensor(
+    np.argsort(f_test)[::-1][: int(FRAC * f_test.shape[0])].copy()
+).to(activs.device)
+
+mean_activs_flat = activs_flat.mean(axis=0)
 
 
 def hook_func(input, output):
@@ -199,7 +214,7 @@ def hook_func(input, output):
     # Flatten the output, patch the specific indices with the mean
     # value, then return to the original shape
     output_flat = rearrange(output, "b c h w -> b (c h w)")
-    output_flat[:, top_inds] = mean_activs_flat
+    output_flat[:, top_inds] = mean_activs_flat[top_inds]
     output = rearrange(
         output_flat,
         "b (c h w) -> b c h w",
