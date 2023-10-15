@@ -102,7 +102,7 @@ def linear_probe(
             f_test_train, _ = f_regression_fixed(x_train, y_train)
         sort_inds_train = f_test_train.argsort()
     if sparse_method is not None:
-        top_K_inds_train = sort_inds_train[-sparse_num:]
+        top_K_inds_train = sort_inds_train[::-1][:sparse_num]
         # Update all x data to only use sparse features
         x = x[:, top_K_inds_train]
         x_train = x_train[:, top_K_inds_train]

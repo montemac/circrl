@@ -87,21 +87,28 @@ cro.make_dataset(
 
 # %%
 # Run a rollout while caching
-LAYER = "features_extractor.cnn.1"
-cache_list = []
+ACTIVS_LAYER = "features_extractor.cnn.1"
+LOGITS_LAYER = "action_net"
+activs_list = []
+logits_list = []
 
 
 def cache_predict(*args, **kwargs):
     """Custom predict func that caches activations from an intermediate
     convolutional layer."""
-    with chk.HookManager(model.policy, cache=[LAYER]) as cache_result:
+    with chk.HookManager(
+        model.policy, cache=[ACTIVS_LAYER, LOGITS_LAYER]
+    ) as cache_result:
         action = model.predict(*args, **kwargs)
-        cache_list.append(cache_result[LAYER])
+        activs_list.append(cache_result[ACTIVS_LAYER])
+        logits_list.append(cache_result[LOGITS_LAYER])
     return action
 
 
 # Run a single episode using CircRL, using the custom predict function
 # that caches activations from an intermediate convolutional layer.
+# Create a new environment to ensure deterministic results
+env = env_setup(0)[0]
 seq, episode_return, step_cnt = cro.run_rollout(
     cache_predict,
     env,
@@ -110,43 +117,107 @@ seq, episode_return, step_cnt = cro.run_rollout(
 
 # Concatenate the cached activations so that batch dimension contains
 # all the chached timesteps
-activs = t.cat(cache_list, dim=0)
+activs = t.cat(activs_list, dim=0)
+logits = t.cat(logits_list, dim=0)
 print(activs.shape)
 
-# %%
-# Demonstrate probing by finding conv channels that seem to track ball position
-
-# First, find the ball in each render using a simple conv filter
-BALL_THRESH = 1500
-kernel = rearrange(
-    t.tensor(
-        [
-            [-1, -1, -1, -1],
-            [-1, 1, 1, -1],
-            [-1, 1, 1, -1],
-            [-1, 1, 1, -1],
-            [-1, 1, 1, -1],
-            [-1, -1, -1, -1],
-        ]
-    ).to(t.float),
-    "i j -> 1 1 i j",
-)
-is_ball = (
-    t.nn.functional.conv2d(
-        rearrange(
-            t.tensor(seq.renders[:, :, :, 2].values), "t i j -> t 1 i j"
-        ).to(t.float),
-        kernel,
-        padding="same",
-    )[:, 0, :, :]
-    > BALL_THRESH
-)
-is_ball_nz = is_ball.nonzero()
-ball_ij = t.full((len(seq.renders), 2), np.nan)
-ball_ij[is_ball_nz[:, 0], :] = is_ball_nz[:, 1:].to(t.float)
-
-# Convert position in render coords to position in coords of the conv
-# layer
-
 
 # %%
+# Demonstrate probing by finding conv pixels that seem to predict a high
+# probability of moving the paddle up
+
+# Get action meanings from the environment
+action_strs = env.envs[0].unwrapped.get_action_meanings()
+
+# Get the action indices that correspond to moving the paddle up, which
+# are RIGHT and RIGHTFIRE
+up_action_idxs = [action_strs.index("RIGHT"), action_strs.index("RIGHTFIRE")]
+
+# Convert the previously cached logits to probabilities
+probs = t.nn.functional.softmax(logits, dim=-1)
+
+# Calculate the sum of the probabilities of moving the paddle up
+up_probs = probs[:, up_action_idxs].sum(dim=-1)
+
+# Our probe objective variable is the a thresholded version
+is_strong_up = (up_probs > 0.9).cpu().numpy()
+
+# Now use CircRL to probe!
+# We use a sparse probe to see if we can find a small set of conv pixels
+# that predict strong paddle-up actions
+SPARSE_NUMS = [1, 5, 10, 20]
+probe_results = []
+for sparse_num in SPARSE_NUMS:
+    result = cpr.linear_probe(
+        activs.cpu().numpy(),
+        is_strong_up,
+        sparse_method="f_test",
+        sparse_num=sparse_num,
+        random_state=0,
+        C=1,
+    )
+    probe_results.append(
+        {"sparse_num": sparse_num, "test_score": result["test_score"]}
+    )
+probe_results = pd.DataFrame(probe_results)
+
+baseline = is_strong_up.mean()
+baseline = max(baseline, 1 - baseline)
+
+fig = px.line(
+    probe_results,
+    x="sparse_num",
+    y="test_score",
+    title="Probe test accuracy vs number of pixels probed",
+    labels={"test_score": "Test accuracy", "sparse_num": "Number of pixels"},
+    render_mode="svg",
+)
+
+# Add a labelled horizontal line for the baseline accuracy
+fig.add_hline(
+    y=baseline,
+    line_dash="dash",
+    line_color="black",
+    annotation_text="Baseline",
+)
+
+fig.show()
+
+# %%
+# Demonstrate custom hook functions mean-ablating the top-K pixels
+# found by the sparse probing to see how this affects the model's
+# behavior
+
+top_inds = t.tensor(result["sparse_inds"].copy()).to(activs.device)
+mean_activs_flat = t.tensor(result["x"].mean(axis=0)).to(activs.device)
+
+
+def hook_func(input, output):
+    """Custom hook function to mean-ablate certain pixels from a conv
+    layer."""
+    # pylint: disable=unused-argument
+    # Flatten the output, patch the specific indices with the mean
+    # value, then return to the original shape
+    output_flat = rearrange(output, "b c h w -> b (c h w)")
+    output_flat[:, top_inds] = mean_activs_flat
+    output = rearrange(
+        output_flat,
+        "b (c h w) -> b c h w",
+        c=output.shape[1],
+        h=output.shape[2],
+    )
+    return output
+
+
+env = env_setup(0)[0]
+with chk.HookManager(model.policy, hook={ACTIVS_LAYER: hook_func}) as _:
+    # Run a single episode using CircRL
+    seq, episode_return, step_cnt = cro.run_rollout(
+        model.predict,
+        env,
+        max_episodes=1,
+    )
+
+# Display video
+vid_fn, fps = cro.make_video_from_renders(seq.renders, fps=30.0)
+display(Video(vid_fn, embed=True, width=300))
