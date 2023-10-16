@@ -2,12 +2,16 @@
 arbitrary models, specifically for caching and patching activations, and
 applying arbitrary hook functions safely."""
 
-from typing import Optional, List, Dict, Callable, Any
+from typing import Optional, List, Dict, Callable
 import torch as t
 from torch import nn
 
 
 class HookManager:
+    """A context manager to simplify the use of pytorch hooks for
+    arbitrary models, specifically for caching and patching activations,
+    and applying arbitrary hook functions safely."""
+
     def __init__(
         self,
         model: nn.Module,
@@ -76,6 +80,7 @@ class HookManager:
         """Returns a hook function that caches activations for a given
         module name."""
 
+        # pylint: disable=unused-argument,redefined-builtin
         def hook(module, input, output):
             self.cache_results[name] = output
 
@@ -87,6 +92,7 @@ class HookManager:
         which will broadcase as needed based on the dimensions of the
         patch tensor."""
 
+        # pylint: disable=unused-argument,redefined-builtin
         def hook(module, input, output):
             output.copy_(patch)
 
@@ -96,6 +102,7 @@ class HookManager:
         """Returns a hook function that applies an arbitrary function to
         activations for a given module name."""
 
+        # pylint: disable=unused-argument,redefined-builtin
         def hook(module, input, output):
             return func(input, output)
 

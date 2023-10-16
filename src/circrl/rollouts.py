@@ -1,4 +1,5 @@
-# %%
+"""Functions and classes for running rollouts and saving associated data."""
+
 import os
 from typing import Optional, Tuple, Dict, List, Union, Callable, Any
 from dataclasses import dataclass
@@ -8,11 +9,11 @@ import json
 import pickle
 import blosc
 import numpy as np
-import pandas as pd
 import torch as t
-import torch.nn as nn
+from torch import nn
 import xarray as xr
 import gym
+import gym.vector
 from tqdm.auto import tqdm
 from moviepy.video.io.ImageSequenceClip import ImageSequenceClip
 from einops import rearrange
@@ -37,24 +38,26 @@ class RlStepSeq:
 
 def run_rollout(
     model_or_func: Union[nn.Module, Callable],
-    env: gym.Env,
+    env: gym.vector.VectorEnv,
     deterministic: bool = False,
     seed: int = 1,
     max_episodes: Optional[int] = 1,
     max_steps: Optional[int] = None,
     show_pbar: bool = True,
     return_renders: bool = True,
-    custom_data_funcs: dict = {},
-) -> Tuple[RlStepSeq, float, int]:
+    custom_data_funcs: Optional[dict] = None,
+) -> Tuple[RlStepSeq, List[float], int]:
     """Run episodes, using provided policy in provided environment.
     Save and return episode data as an RlStepSeq object."""
     assert (
         max_episodes is not None or max_steps is not None
     ), "Must provide max episodes or steps."
+    if custom_data_funcs is None:
+        custom_data_funcs = {}
     # Confirm that the environment is vectorized (required)
     assert hasattr(env, "num_envs"), "Environment must be vectorized"
     # This function only works for a single environment
-    assert env.num_envs == 1, "Only single environment is supported."
+    assert env.num_envs == 1, "Only single environment is supported."  # type: ignore
     # Determine what function to call for getting actions
     if isinstance(model_or_func, nn.Module):
         if hasattr(model_or_func, "predict"):
@@ -71,7 +74,7 @@ def run_rollout(
     env.action_space.seed(seed)
     env.observation_space.seed(seed)
     try:
-        env.seed(seed)
+        env.seed(seed)  # type: ignore
     except (TypeError, AttributeError):
         warnings.warn("Seed setting failed.")
     # Reset the environment to get the initial observation
@@ -86,14 +89,14 @@ def run_rollout(
     custom_data_all = {nm: [] for nm in custom_data_funcs.keys()}
     step_cnt = 0
     is_complete = False
-    episode_returns = []
+    episode_returns: List[float] = []
     with tqdm(total=max_steps, disable=not show_pbar) as pbar:
         while not is_complete:
             # Convert the observation from dict form if needed
             if isinstance(obs, dict):
                 obs = obs["rgb"]
             # Get the latest frame
-            render = env.render(mode="rgb_array")
+            render = env.render()
             # Get action and model states
             with t.no_grad():
                 action, model_states, *extra = predict_func(
@@ -115,7 +118,7 @@ def run_rollout(
                     )
                 )
             # Step environment
-            obs_next, rewards, dones, infos = env.step(action)
+            obs_next, rewards, dones, infos = env.step(action)  # type: ignore
             # Store the obs, action, model_state, reward, done
             if return_renders:
                 renders_all.append(render)
@@ -246,6 +249,7 @@ def split_seq(seq: RlStepSeq, start_inds: List[int]) -> List[RlStepSeq]:
 def make_video_from_renders(
     renders: xr.DataArray, fps: float = 30.0
 ) -> Tuple[str, float]:
+    """Make a video from a sequence of renders.  Returns the filename and the fps."""
     vid_fn = "temp_seq_video.mp4"
     clip = ImageSequenceClip([aa.to_numpy() for aa in renders], fps=fps)
     clip.write_videofile(vid_fn, logger=None)
@@ -253,15 +257,21 @@ def make_video_from_renders(
 
 
 class TempVideoFileFromSeq:
+    """Context manager for creating a temporary video file from a sequence of renders."""
+
     def __init__(self, seq: RlStepSeq, fps=30.0):
         self.seq = seq
         self.fps = fps
+        self.vid_fn = ""
 
     def __enter__(self):
         # Create the temp file from the renders, return the filename
-        self.vid_fn, _ = make_video_from_renders(
-            self.seq.renders, fps=self.fps
-        )
+        if self.seq.renders is None:
+            raise ValueError("Sequence does not contain renders.")
+        else:
+            self.vid_fn, _ = make_video_from_renders(
+                self.seq.renders, fps=self.fps
+            )
 
     def __exit__(self, *args, **kwargs):
         # Delete the temp file if it exists
@@ -288,12 +298,12 @@ def make_dataset(
     dr = utc.strftime(os.path.join(path, "%Y%m%dT%H%M%S"))
     os.mkdir(dr)
     # Create a dataset metadata file
-    metadata = dict(
-        desc=desc,
-        timestamp=utc.strftime("%Y%m%dT%H%M%S"),
-        num_episodes=num_episodes,
-        run_rollout_kwargs=run_rollout_kwargs,
-    )
+    metadata = {
+        "desc": desc,
+        "timestamp": utc.strftime("%Y%m%dT%H%M%S"),
+        "num_episodes": num_episodes,
+        "run_rollout_kwargs": run_rollout_kwargs,
+    }
     with open(os.path.join(dr, "metadata.json"), "w", encoding="utf-8") as fl:
         json.dump(metadata, fl, indent=2, default=str)
     # Loop through episodes
@@ -308,13 +318,13 @@ def make_dataset(
             predict_func, venv, seed=seed, **run_rollout_kwargs
         )
         # Prepare episode data object
-        episode_data = dict(
-            episode_metadata=episode_metadata,
-            seq=seq if seq_mod_func is None else seq_mod_func(seq),
-            episode_returns=episode_returns,
-            step_cnt=step_cnt,
-            ep_cnt=ep_cnt,
-        )
+        episode_data = {
+            "episode_metadata": episode_metadata,
+            "seq": seq if seq_mod_func is None else seq_mod_func(seq),
+            "episode_returns": episode_returns,
+            "step_cnt": step_cnt,
+            "ep_cnt": ep_cnt,
+        }
         # Save episode data
         pickled_data = pickle.dumps(
             episode_data, protocol=pickle.HIGHEST_PROTOCOL
@@ -337,26 +347,26 @@ def load_saved_rollout(fn):
 # %%
 # Basic tests
 
-if __name__ == "__main__":
-    # Dummy predict function
-    def predict(obs, deterministic=False):
-        return np.array([0]), None
+# if __name__ == "__main__":
+#     # Dummy predict function
+#     def predict(obs, deterministic=False):
+#         return np.array([0]), None
 
-    # Test with a normal gym env
-    # env = gym.make('CartPole-v1')
-    # run_rollout(predict, env, max_steps=50)
+#     # Test with a normal gym env
+#     # env = gym.make('CartPole-v1')
+#     # run_rollout(predict, env, max_steps=50)
 
-    # Test an atari env
-    # from stable_baselines3.common.vec_env import VecFrameStack
-    # from stable_baselines3.common.env_util import make_atari_env
-    # env = make_atari_env("PongNoFrameskip-v4", n_envs=1, seed=0)
-    # env = VecFrameStack(env, n_stack=4)
-    # seq, episode_returns, step_cnt = run_rollout(predict, env, max_steps=50)
+#     # Test an atari env
+#     # from stable_baselines3.common.vec_env import VecFrameStack
+#     # from stable_baselines3.common.env_util import make_atari_env
+#     # env = make_atari_env("PongNoFrameskip-v4", n_envs=1, seed=0)
+#     # env = VecFrameStack(env, n_stack=4)
+#     # seq, episode_returns, step_cnt = run_rollout(predict, env, max_steps=50)
 
-    # Test with a procgen gym3 env
-    import procgen
+#     # Test with a procgen gym3 env
+#     import procgen
 
-    env = procgen.ProcgenEnv(
-        num_envs=1, env_name="maze", num_levels=1, start_level=0
-    )
-    seq, episode_returns, step_cnt = run_rollout(predict, env, max_steps=50)
+#     env = procgen.ProcgenEnv(
+#         num_envs=1, env_name="maze", num_levels=1, start_level=0
+#     )
+#     seq, episode_returns, step_cnt = run_rollout(predict, env, max_steps=50)
