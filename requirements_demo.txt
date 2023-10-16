@@ -1,0 +1,11 @@
+circrl
+stable-baselines3>=2.1.0
+huggingface_hub>=0.18.0
+shimmy>=1.2.1
+gym[atari, accept-rom-license]>=0.26.2
+opencv-python>=4.8.1.78
+plotly>=5.17.0
+einops>=0.7.0
+kaleido>=0.2.1
+nbformat>=4.2.0
+ipykernel
