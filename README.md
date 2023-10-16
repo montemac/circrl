@@ -32,7 +32,7 @@ CircRL is licensed under the MIT license.
 
 ## Citation
 
-If you use CircRL in your research, please cite the following paper:
+If you use CircRL in your research, please cite according to:
 
 ```bibtex
 @misc{circrl,
