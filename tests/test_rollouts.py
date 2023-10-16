@@ -1,14 +1,7 @@
-import warnings
 import numpy as np
 import pytest
 
 from circrl.rollouts import run_rollout, RlStepSeq
-
-warnings.filterwarnings(
-    "ignore",
-    message=".*No render fps was declared in the environment.*",
-    category=UserWarning,
-)
 
 
 @pytest.fixture
